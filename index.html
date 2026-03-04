@@ -512,10 +512,10 @@ function getAlerts() {
     if(i.Tipo==='concentrado' && i.Volumen_uL && i.Dilucion) {
       const vol = parseFloat(i.Volumen_uL), dil = parseFloat(i.Dilucion), alq = parseFloat(i.Aliquot_uL)||100;
       const totalDets = Math.floor(vol * dil / alq);
-      const volRest = (i.VolumenRestante !== '' && i.VolumenRestante !== undefined && !isNaN(parseFloat(i.VolumenRestante))) ? parseFloat(i.VolumenRestante) : vol;
-      const detsRest = Math.max(0, Math.floor(volRest * dil / alq));
+      const preps = parseInt(i.Preparaciones)||0;
+      const detsRest = (preps>0 && i.VolumenRestante!=='' && !isNaN(parseInt(i.VolumenRestante))) ? parseInt(i.VolumenRestante) : totalDets;
       const pct = totalDets > 0 ? detsRest / totalDets : 1;
-      if (pct <= 0.5 && detsRest > 0 && parseInt(i.Preparaciones) > 0) res.push({type:'lowvol', item:i, pct, detsRest, totalDets});
+      if (pct <= 0.5 && detsRest > 0 && preps > 0) res.push({type:'lowvol', item:i, pct, detsRest, totalDets});
     }
   });
   Object.entries(cnt).forEach(([name,n])=>{ if(n===1) res.push({type:'last',item:stock.find(s=>s.Anticuerpo===name)}); });
@@ -609,11 +609,17 @@ function volBar(i) {
   const totalDets = Math.floor(vol * dil / alq);
   if (!totalDets) return '—';
 
-  // Remaining volume → remaining dets
-  const volRest = (i.VolumenRestante !== '' && i.VolumenRestante !== undefined && !isNaN(parseFloat(i.VolumenRestante)))
-    ? parseFloat(i.VolumenRestante) : vol;
-  const detsRest = Math.max(0, Math.floor(volRest * dil / alq));
   const preps = parseInt(i.Preparaciones) || 0;
+
+  // Column VolumenRestante now stores remaining DETERMINATIONS directly (integer)
+  // If no preps done yet, show full total
+  let detsRest;
+  if (preps === 0 || i.VolumenRestante === '' || i.VolumenRestante === undefined || isNaN(parseInt(i.VolumenRestante))) {
+    detsRest = totalDets;
+  } else {
+    detsRest = Math.max(0, parseInt(i.VolumenRestante));
+  }
+
   const pct = totalDets > 0 ? (detsRest / totalDets) * 100 : 100;
   const color = pct <= 25 ? 'var(--danger)' : pct <= 50 ? 'var(--warn)' : 'var(--success)';
 
