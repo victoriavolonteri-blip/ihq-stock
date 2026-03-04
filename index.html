@@ -329,10 +329,11 @@
       <div class="fi"><label class="fl">Fecha de vencimiento</label><input class="finput" type="date" id="f-exp"/></div>
       <div class="fi"><label class="fl">Fecha de recepción</label><input class="finput" type="date" id="f-rec"/></div>
       <div class="fi"><label class="fl">Fecha de apertura</label><input class="finput" type="date" id="f-open"/></div>
-      <div class="fi" id="g-vol"><label class="fl">Contenido frasco (µL)</label><input class="finput" type="number" id="f-vol" placeholder="ej: 1000" oninput="calcPreview()"/></div>
-      <div class="fi" id="g-dil"><label class="fl">Dilución (1 : X)</label><input class="finput" type="number" id="f-dil" placeholder="ej: 100" oninput="calcPreview()"/></div>
-      <div class="fi" id="g-alq"><label class="fl">µL por determinación</label><input class="finput" type="number" id="f-alq" value="100" oninput="calcPreview()"/></div>
-      <div class="calc-box" id="calc-box" style="display:none"><div><div class="calc-n" id="calc-n">—</div><div class="dl">determinaciones</div></div><div class="calc-info" id="calc-info"></div></div>
+      <div class="fi" id="g-vol"><label class="fl">Contenido frasco (µL) — referencia</label><input class="finput" type="number" id="f-vol" placeholder="ej: 1000" oninput="calcPreview()"/></div>
+      <div class="fi" id="g-dil"><label class="fl">Dilución (1 : X) — referencia</label><input class="finput" type="number" id="f-dil" placeholder="ej: 100" oninput="calcPreview()"/></div>
+      <div class="fi" id="g-alq"><label class="fl">µL por determinación — referencia</label><input class="finput" type="number" id="f-alq" value="100" oninput="calcPreview()"/></div>
+      <div class="fi" id="g-preps"><label class="fl">Preparaciones que rinde el frasco *</label><input class="finput" type="number" id="f-preps" placeholder="ej: 8" min="1" oninput="calcPreview()"/></div>
+      <div class="calc-box" id="calc-box" style="display:none"><div><div class="calc-n" id="calc-n">—</div><div class="dl">preparaciones</div></div><div class="calc-info" id="calc-info"></div></div>
       <div class="fi"><label class="fl">Código SAF</label><input class="finput" id="f-saf" placeholder="Código interno SAF"/></div>
       <div class="fi"><label class="fl">Validado</label>
         <select class="fsel" id="f-validado">
@@ -509,16 +510,23 @@ function getAlerts() {
     else if(d!==null&&d<=60) res.push({type:'soon',item:i,days:d});
     if(i.Validado!=='Si') res.push({type:'noval',item:i});
     // Determinations alert: less than 50% remaining
-    if(i.Tipo==='concentrado' && i.Volumen_uL && i.Dilucion) {
-      const vol = parseFloat(i.Volumen_uL), dil = parseFloat(i.Dilucion), alq = parseFloat(i.Aliquot_uL)||100;
-      const totalDets = Math.floor(vol * dil / alq);
-      const preps = parseInt(i.Preparaciones)||0;
-      const detsRest = (preps>0 && i.VolumenRestante!=='' && !isNaN(parseInt(i.VolumenRestante))) ? parseInt(i.VolumenRestante) : totalDets;
-      const pct = totalDets > 0 ? detsRest / totalDets : 1;
-      if (pct <= 0.5 && detsRest > 0 && preps > 0) res.push({type:'lowvol', item:i, pct, detsRest, totalDets});
+    if(i.Tipo==='concentrado' && i.PrepsTotales) {
+      const total = parseInt(i.PrepsTotales);
+      const realizadas = parseInt(i.Preparaciones)||0;
+      const restantes = Math.max(0, total - realizadas);
+      const pct = total > 0 ? restantes/total : 1;
+      if (pct <= 0.5 && restantes > 0 && realizadas > 0) res.push({type:'lowvol', item:i, pct, restantes, total});
+      if (restantes === 0 && realizadas > 0) res.push({type:'agotado', item:i});
     }
   });
   Object.entries(cnt).forEach(([name,n])=>{ if(n===1) res.push({type:'last',item:stock.find(s=>s.Anticuerpo===name)}); });
+  // Orders pending > 60 days
+  orders.forEach(o=>{
+    if(o.Estado==='Pendiente' && o.FechaPedido) {
+      const days = Math.floor((new Date() - new Date(o.FechaPedido)) / 86400000);
+      if(days >= 60) res.push({type:'oldorder', order:o, days});
+    }
+  });
   return res;
 }
 
@@ -602,38 +610,25 @@ function renderFinished() {
 }
 
 function volBar(i) {
-  if (i.Tipo !== 'concentrado' || !i.Volumen_uL || !i.Dilucion) return '—';
-  const vol   = parseFloat(i.Volumen_uL);
-  const dil   = parseFloat(i.Dilucion);
-  const alq   = parseFloat(i.Aliquot_uL) || 100;
-  const totalDets = Math.floor(vol * dil / alq);
-  if (!totalDets) return '—';
-
-  const preps = parseInt(i.Preparaciones) || 0;
-
-  // Column VolumenRestante now stores remaining DETERMINATIONS directly (integer)
-  // If no preps done yet, show full total
-  let detsRest;
-  if (preps === 0 || i.VolumenRestante === '' || i.VolumenRestante === undefined || isNaN(parseInt(i.VolumenRestante))) {
-    detsRest = totalDets;
-  } else {
-    detsRest = Math.max(0, parseInt(i.VolumenRestante));
-  }
-
-  const pct = totalDets > 0 ? (detsRest / totalDets) * 100 : 100;
+  if (i.Tipo !== 'concentrado') return '—';
+  const total = parseInt(i.PrepsTotales);
+  if (!total || isNaN(total)) return '—';
+  const realizadas = parseInt(i.Preparaciones) || 0;
+  const restantes = Math.max(0, total - realizadas);
+  const pct = (restantes / total) * 100;
   const color = pct <= 25 ? 'var(--danger)' : pct <= 50 ? 'var(--warn)' : 'var(--success)';
-
   return `<div style="min-width:110px">
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
-      <span style="font-size:16px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${color}">${detsRest}</span>
-      <span style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">/ ${totalDets} det.</span>
+      <span style="font-size:18px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${color}">${restantes}</span>
+      <span style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">/ ${total} prep.</span>
     </div>
     <div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden">
       <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;transition:width 0.3s"></div>
     </div>
     <div style="display:flex;justify-content:space-between;margin-top:3px">
-      <span style="font-size:9px;color:var(--muted)">${preps} prep${preps!==1?'s':''}</span>
-      ${pct<=50&&detsRest>0?`<span style="font-size:9px;color:${color};font-weight:700">⚠ MITAD</span>`:''}
+      <span style="font-size:9px;color:var(--muted)">${realizadas} realizada${realizadas!==1?'s':''}</span>
+      ${pct<=50&&restantes>0?`<span style="font-size:9px;color:${color};font-weight:700">⚠ MITAD</span>`:''}
+      ${restantes===0?`<span style="font-size:9px;color:var(--danger);font-weight:700">AGOTADO</span>`:''}
     </div>
   </div>`;
 }
@@ -694,19 +689,15 @@ function resetForm(){
 }
 function toggleConc(){
   const c=document.getElementById('f-type').value==='concentrado';
-  ['g-vol','g-dil','g-alq'].forEach(id=>document.getElementById(id).style.display=c?'flex':'none');
+  ['g-vol','g-dil','g-alq','g-preps'].forEach(id=>document.getElementById(id).style.display=c?'flex':'none');
   document.getElementById('calc-box').style.display='none';
 }
 function calcPreview(){
-  const vol=parseFloat(document.getElementById('f-vol').value);
-  const dil=parseFloat(document.getElementById('f-dil').value);
-  const alq=parseFloat(document.getElementById('f-alq').value)||100;
+  const preps=parseInt(document.getElementById('f-preps').value);
   const box=document.getElementById('calc-box');
-  if(vol&&dil){
-    const d=calcDets(vol,dil,alq);
-    document.getElementById('calc-n').textContent=d??'—';
-    const ulPorVidrio = (alq/dil).toFixed(2);
-    document.getElementById('calc-info').innerHTML=`Cada vidrio usa ${ulPorVidrio}µL del frasco (${alq}µL ÷ ${dil})<br>${vol}µL ÷ ${ulPorVidrio}µL = <strong style="color:var(--accent)">${d} determinaciones totales</strong>`;
+  if(preps&&preps>0){
+    document.getElementById('calc-n').textContent=preps;
+    document.getElementById('calc-info').innerHTML=`Este frasco rinde <strong style="color:var(--accent)">${preps} preparaciones</strong>`;
     box.style.display='flex';
   } else { box.style.display='none'; }
 }
@@ -729,6 +720,7 @@ async function saveItem(){
     Volumen_uL:document.getElementById('f-vol').value,
     Dilucion:document.getElementById('f-dil').value,
     Aliquot_uL:document.getElementById('f-alq').value||'100',
+    PrepsTotales:document.getElementById('f-preps').value,
     Notas:document.getElementById('f-notes').value,
   };
   try{
@@ -742,20 +734,16 @@ async function saveItem(){
 function editItem(id){
   const i=stock.find(s=>s.ID===id);if(!i)return;
   editId=id;
-
-  // Format date to YYYY-MM-DD for the date input
   const fmtDate = v => {
     if (!v || v === 'Invalid Date') return '';
     const s = v.toString().trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    // Try DD/MM/YYYY
     const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`;
     const d = new Date(s);
     if (!isNaN(d)) return d.toISOString().slice(0,10);
     return '';
   };
-
   document.getElementById('f-ab').value=i.Anticuerpo||'';
   document.getElementById('f-clon').value=i.Clon||'';
   document.getElementById('f-saf').value=i.SAF||'';
@@ -769,8 +757,36 @@ function editItem(id){
   document.getElementById('f-vol').value=i.Volumen_uL||'';
   document.getElementById('f-dil').value=i.Dilucion||'';
   document.getElementById('f-alq').value=i.Aliquot_uL||'100';
+  document.getElementById('f-preps').value=i.PrepsTotales||'';
   document.getElementById('f-notes').value=i.Notas||'';
   openModal('form');
+}
+async function registerPrep(id) {
+  const i = stock.find(s=>s.ID===id); if(!i) return;
+  const totalPreps = parseInt(i.PrepsTotales)||0;
+  const prepsRealizadas = parseInt(i.Preparaciones)||0;
+  const prepsRestantes = totalPreps > 0 ? totalPreps - prepsRealizadas : null;
+
+  const ex = document.getElementById('modal-prep'); if(ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-prep'; modal.className = 'overlay'; modal.style.display='flex';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <div class="mh"><div class="mt">🧪 Registrar preparación</div><button class="mc" onclick="document.getElementById('modal-prep').remove()">✕</button></div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6">
+        <strong style="color:var(--text)">${i.Anticuerpo}</strong>${i.Dilucion?' — Dilución 1:'+i.Dilucion:''}<br>
+        ${prepsRestantes!==null?`<span style="font-size:13px;color:var(--accent);font-weight:700">Quedan ${prepsRestantes} de ${totalPreps} preparaciones</span>`:''}
+      </div>
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:16px;text-align:center;margin-bottom:20px">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:4px">¿Confirmás que realizaste una preparación?</div>
+        <div style="font-size:12px;color:var(--muted)">Se descontará 1 preparación del frasco</div>
+      </div>
+      <div class="mf">
+        <button class="bcancel" onclick="document.getElementById('modal-prep').remove()">Cancelar</button>
+        <button class="bsave" onclick="confirmPrep('${id}')">✓ Registrar preparación</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 async function registerPrep(id) {
   const i = stock.find(s=>s.ID===id); if(!i) return;
@@ -820,14 +836,12 @@ async function registerPrep(id) {
   input.focus(); input.select();
 }
 
-async function confirmPrep(id, dil) {
-  const prepVol = parseFloat(document.getElementById('prep-vol-input').value);
-  if (!prepVol || prepVol <= 0) { showToast('Ingresá un volumen válido','err'); return; }
+async function confirmPrep(id) {
   document.getElementById('modal-prep').remove();
   try {
-    const res = await api({ action:'registerPrep', id, prepVol });
+    const res = await api({ action:'registerPrep', id });
     await loadData();
-    showToast(`Prep registrada — ${res.detsConsumidas} det. usadas. Quedan ${res.detsRestantes} de ${res.totalDets} ✓`, res.detsRestantes <= res.totalDets/2 ? 'inf' : 'ok');
+    showToast(`Preparación registrada — Quedan ${res.prepsRestantes} de ${res.prepsTotales} preparaciones ✓`, res.prepsRestantes <= res.prepsTotales/2 ? 'inf' : 'ok');
   } catch(e) {}
 }
 async function finishItem(id){
@@ -965,18 +979,18 @@ function renderAlertsModal(){
   const c=document.getElementById('alerts-content');
   if(!al.length){c.innerHTML=`<div style="text-align:center;padding:30px;color:var(--muted)"><div style="font-size:40px;margin-bottom:10px">✅</div><div>Todo en orden</div></div>`;return;}
   c.innerHTML=al.map(a=>{
-    const cls=a.type==='exp'?'ai-exp':a.type==='soon'||a.type==='lowvol'?'ai-soon':a.type==='noval'?'ai-soon':'ai-last';
-    const icon=a.type==='exp'?'🚨':a.type==='soon'?'⏰':a.type==='noval'?'🔬':a.type==='lowvol'?'💧':'📦';
-    const msg=a.type==='exp'
-      ?`<span style="color:var(--danger)">VENCIDO hace ${Math.abs(a.days)} días (${a.item.Vencimiento})</span>`
-      :a.type==='soon'
-      ?`<span style="color:var(--warn)">Vence en ${a.days} días (${a.item.Vencimiento})</span>`
-      :a.type==='noval'
-      ?`<span style="color:var(--warn)">Anticuerpo NO validado</span>`
-      :a.type==='lowvol'
-      ?`<span style="color:var(--warn)">Quedan ${a.detsRest} determinaciones (${Math.round(a.pct*100)}% del total de ${a.totalDets})</span>`
-      :`<span style="color:#fb923c">Último frasco de este anticuerpo</span>`;
-    return `<div class="alert-item ${cls}"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${icon}</span><strong>${a.item.Anticuerpo}</strong></div><div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">Lote: ${a.item.Lote||'—'} · ${a.item.Marca||'—'}</div><div style="font-size:12px;font-weight:600;margin-top:5px">${msg}</div></div>`;
+    const cls = a.type==='exp'?'ai-exp' : a.type==='agotado'?'ai-exp' : a.type==='soon'||a.type==='lowvol'||a.type==='oldorder'?'ai-soon' : 'ai-last';
+    const icon = a.type==='exp'?'🚨' : a.type==='soon'?'⏰' : a.type==='noval'?'🔬' : a.type==='lowvol'?'💧' : a.type==='agotado'?'⛔' : a.type==='oldorder'?'🛒' : '📦';
+    const name = a.type==='oldorder' ? a.order.Anticuerpo : a.item.Anticuerpo;
+    const sub  = a.type==='oldorder' ? `SAF: ${a.order.SAF||'—'} · Pedido el: ${a.order.FechaPedido}` : `Lote: ${a.item.Lote||'—'} · ${a.item.Marca||'—'}`;
+    const msg  = a.type==='exp'      ? `<span style="color:var(--danger)">VENCIDO hace ${Math.abs(a.days)} días (${a.item.Vencimiento})</span>`
+               : a.type==='soon'     ? `<span style="color:var(--warn)">Vence en ${a.days} días (${a.item.Vencimiento})</span>`
+               : a.type==='noval'    ? `<span style="color:var(--warn)">Anticuerpo NO validado</span>`
+               : a.type==='lowvol'   ? `<span style="color:var(--warn)">Quedan ${a.restantes} de ${a.total} preparaciones (${Math.round(a.pct*100)}%)</span>`
+               : a.type==='agotado'  ? `<span style="color:var(--danger)">Sin preparaciones restantes — considerá pedir más</span>`
+               : a.type==='oldorder' ? `<span style="color:var(--warn)">Pedido hace ${a.days} días sin recibir — ¿reclamaste?</span>`
+               :                       `<span style="color:#fb923c">Último frasco de este anticuerpo</span>`;
+    return `<div class="alert-item ${cls}"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${icon}</span><strong>${name}</strong></div><div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">${sub}</div><div style="font-size:12px;font-weight:600;margin-top:5px">${msg}</div></div>`;
   }).join('');
 }
 
