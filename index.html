@@ -207,6 +207,17 @@
       </div>
     </div>
 
+    <div class="step-block">
+      <div class="step-num">4</div>
+      <div style="flex:1">
+        <div class="step-title">API Key de Anthropic <span style="color:var(--muted);font-weight:400">(opcional — para leer remitos con IA)</span></div>
+        <div class="step-desc">
+          Creá una cuenta en <code>console.anthropic.com</code>, andá a <code>API Keys → Create Key</code> y pegá la clave acá. Solo es necesaria para la función de leer remitos con la cámara.
+        </div>
+        <input class="setup-input" id="inp-apikey" placeholder="sk-ant-..." type="password"/>
+      </div>
+    </div>
+
     <button class="btn-connect" onclick="connectSheets()">Conectar y abrir la app →</button>
 
     <div class="info-box">
@@ -345,8 +356,9 @@
         <div>1. Descargar el archivo <strong style="color:var(--text)">ihq-stock.html</strong> desde Google Drive del hospital</div>
         <div>2. Abrirlo en el navegador (doble clic)</div>
         <div>3. En el campo de URL, pegar la URL copiada arriba</div>
-        <div>4. Hacer clic en <strong style="color:var(--text)">"Conectar y abrir la app"</strong></div>
-        <div>5. Guardar la página como favorito <strong style="color:var(--text)">(Ctrl+D)</strong></div>
+        <div>4. Opcionalmente pegar la API key de Anthropic (para leer remitos)</div>
+        <div>5. Hacer clic en <strong style="color:var(--text)">"Conectar y abrir la app"</strong></div>
+        <div>6. Guardar la página como favorito <strong style="color:var(--text)">(Ctrl+D)</strong></div>
       </div>
     </div>
 
@@ -359,24 +371,29 @@
 <div class="toast" id="toast"></div>
 
 <script>
-let SCRIPT_URL = '';
+let SCRIPT_URL = '', ANTHROPIC_KEY = '';
 let stock = [], finished = [], editId = null, curFilter = 'all';
 
 // ---- SETUP ----
 function connectSheets() {
   const url = document.getElementById('inp-url').value.trim();
+  const key = document.getElementById('inp-apikey').value.trim();
   if (!url.includes('script.google.com')) { showToast('Pegá la URL del Web App de Apps Script','err'); return; }
   SCRIPT_URL = url;
   localStorage.setItem('ihq_url', url);
+  if (key) { ANTHROPIC_KEY = key; localStorage.setItem('ihq_apikey', key); }
   launchApp();
 }
 function resetCfg() {
-  if (!confirm('¿Cambiar la configuración del script?')) return;
+  if (!confirm('¿Cambiar la configuración?')) return;
   localStorage.removeItem('ihq_url');
+  localStorage.removeItem('ihq_apikey');
   location.reload();
 }
 function checkConfig() {
   const saved = localStorage.getItem('ihq_url');
+  const key = localStorage.getItem('ihq_apikey');
+  if (key) ANTHROPIC_KEY = key;
   if (saved) { SCRIPT_URL = saved; launchApp(); }
 }
 async function launchApp() {
@@ -756,6 +773,11 @@ async function scanRemito(event) {
   if (!file) return;
   event.target.value = '';
 
+  if (!ANTHROPIC_KEY) {
+    showToast('Falta la API key de Anthropic — hacé clic en ⚙️ para configurarla', 'err');
+    return;
+  }
+
   document.getElementById('loading-text').textContent = '📷 Leyendo remito con IA...';
   document.getElementById('loading-overlay').style.display = 'flex';
 
@@ -770,29 +792,35 @@ async function scanRemito(event) {
 
     const mediaType = file.type || 'image/jpeg';
 
-    const prompt = `Analizá esta imagen de un remito o etiqueta de anticuerpo para inmunohistoquímica.
-Extraé la información y respondé SOLO con un JSON válido, sin texto adicional ni backticks:
+    const prompt = `Analizá esta imagen de un remito de anticuerpos para inmunohistoquímica.
+El remito puede tener UNO O VARIOS anticuerpos. Extraé todos los que aparezcan.
+Respondé SOLO con un JSON válido, sin texto adicional ni backticks, con este formato:
 {
-  "Anticuerpo": "nombre del anticuerpo (ej: Ki-67, CD20, p53)",
-  "Clon": "nombre del clon si aparece (ej: MIB-1, SP6)",
-  "Lote": "número de lote",
-  "Marca": "marca o fabricante",
-  "Tipo": "concentrado o prediluido (si no está claro, ponés concentrado)",
-  "Vencimiento": "fecha en formato YYYY-MM-DD, o vacío si no aparece",
-  "Recepcion": "",
-  "Volumen_uL": "volumen en microlitros como número, o vacío",
-  "Dilucion": "factor de dilución como número (ej: si dice 1:100 ponés 100), o vacío",
-  "SAF": "",
-  "Notas": "cualquier otra info relevante del remito"
+  "items": [
+    {
+      "Anticuerpo": "nombre del anticuerpo (ej: Ki-67, CD20, CK7)",
+      "Clon": "nombre del clon si aparece",
+      "Lote": "número de lote",
+      "Marca": "marca o fabricante",
+      "Tipo": "concentrado o prediluido (si no está claro, ponés concentrado)",
+      "Vencimiento": "fecha en formato YYYY-MM-DD, o vacío si no aparece",
+      "Volumen_uL": "volumen en microlitros como número, o vacío",
+      "Dilucion": "factor de dilución como número (ej: si dice 1:100 ponés 100), o vacío",
+      "Cantidad": 1,
+      "Notas": "cualquier otra info relevante"
+    }
+  ]
 }
-Si algún campo no aparece en la imagen dejalo vacío. Solo devolvé el JSON.`;
+Si un anticuerpo tiene múltiples lotes o vencimientos, creá una entrada por cada lote.
+Si dice cantidad mayor a 1, creá esa cantidad de entradas idénticas.
+Solo devolvé el JSON.`;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        max_tokens: 2000,
         messages: [{
           role: 'user',
           content: [
@@ -804,36 +832,83 @@ Si algún campo no aparece en la imagen dejalo vacío. Solo devolvé el JSON.`;
     });
 
     const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
     const text = data.content?.map(c => c.text || '').join('') || '';
     const clean = text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
+    const items = parsed.items || [parsed];
 
     document.getElementById('loading-overlay').style.display = 'none';
 
-    // Fill form with extracted data
-    editId = null;
-    document.getElementById('f-ab').value = parsed.Anticuerpo || '';
-    document.getElementById('f-clon').value = parsed.Clon || '';
-    document.getElementById('f-lot').value = parsed.Lote || '';
-    document.getElementById('f-brand').value = parsed.Marca || '';
-    document.getElementById('f-type').value = parsed.Tipo === 'prediluido' ? 'prediluido' : 'concentrado';
-    document.getElementById('f-validado').value = 'No';
-    document.getElementById('f-exp').value = parsed.Vencimiento || '';
-    document.getElementById('f-rec').value = new Date().toISOString().slice(0,10); // today
-    document.getElementById('f-open').value = '';
-    document.getElementById('f-vol').value = parsed.Volumen_uL || '';
-    document.getElementById('f-dil').value = parsed.Dilucion || '';
-    document.getElementById('f-alq').value = '100';
-    document.getElementById('f-saf').value = parsed.SAF || '';
-    document.getElementById('f-notes').value = parsed.Notas || '';
+    if (items.length === 0) { showToast('No se encontraron anticuerpos en el remito', 'err'); return; }
 
-    openModal('form');
-    showToast('Remito leído — revisá y completá los datos que falten', 'inf');
+    if (items.length === 1) {
+      // Single antibody — open form directly
+      fillFormFromRemito(items[0]);
+      openModal('form');
+      showToast('Remito leído — revisá y completá los datos que falten', 'inf');
+    } else {
+      // Multiple antibodies — show selection modal
+      showRemitoModal(items);
+    }
 
   } catch(e) {
     document.getElementById('loading-overlay').style.display = 'none';
     showToast('No se pudo leer el remito: ' + e.message, 'err');
   }
+}
+
+function fillFormFromRemito(item) {
+  editId = null;
+  document.getElementById('f-ab').value = item.Anticuerpo || '';
+  document.getElementById('f-clon').value = item.Clon || '';
+  document.getElementById('f-lot').value = item.Lote || '';
+  document.getElementById('f-brand').value = item.Marca || '';
+  document.getElementById('f-type').value = item.Tipo === 'prediluido' ? 'prediluido' : 'concentrado';
+  document.getElementById('f-validado').value = 'No';
+  document.getElementById('f-exp').value = item.Vencimiento || '';
+  document.getElementById('f-rec').value = new Date().toISOString().slice(0,10);
+  document.getElementById('f-open').value = '';
+  document.getElementById('f-vol').value = item.Volumen_uL || '';
+  document.getElementById('f-dil').value = item.Dilucion || '';
+  document.getElementById('f-alq').value = '100';
+  document.getElementById('f-saf').value = '';
+  document.getElementById('f-notes').value = item.Notas || '';
+  toggleConc(); calcPreview();
+}
+
+function showRemitoModal(items) {
+  // Create a temporary modal to show all detected antibodies
+  const existing = document.getElementById('modal-remito');
+  if (existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-remito';
+  modal.className = 'overlay';
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:560px">
+      <div class="mh">
+        <div class="mt">📋 Anticuerpos detectados en el remito</div>
+        <button class="mc" onclick="document.getElementById('modal-remito').remove()">✕</button>
+      </div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">Se encontraron <strong style="color:var(--text)">${items.length} anticuerpos</strong>. Hacé clic en uno para abrirlo en el formulario y guardarlo.</div>
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;">
+        ${items.map((item,idx) => `
+          <div onclick="fillFormFromRemito(${JSON.stringify(item).replace(/"/g,'&quot;')}); document.getElementById('modal-remito').remove(); openModal('form'); showToast('Revisá y completá los datos','inf');"
+            style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:13px 15px;cursor:pointer;transition:background 0.15s;"
+            onmouseover="this.style.background='#e0f2fe'" onmouseout="this.style.background='#f8fafc'">
+            <div style="font-weight:700;font-size:14px">${item.Anticuerpo}</div>
+            <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:3px">
+              ${item.Clon?'Clon: '+item.Clon+' · ':''}Lote: ${item.Lote||'—'} · Vence: ${item.Vencimiento||'—'}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="margin-top:16px;font-size:12px;color:var(--muted);text-align:center">Guardá cada frasco por separado revisando los datos</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
 }
 
 // ---- IMPORT EXCEL ----
