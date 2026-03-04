@@ -92,9 +92,9 @@
   .btn-xl:hover { background: rgba(5,150,105,0.15); }
   .btn-reload { background: rgba(2,132,199,0.06); border: 1px solid rgba(2,132,199,0.2); border-radius: 8px; padding: 8px 14px; cursor: pointer; color: var(--accent); font-size: 11px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
 
-  .tw { overflow-x: auto; }
+  .tw { overflow-x: auto; max-height: calc(100vh - 280px); overflow-y: auto; }
   table { width: 100%; border-collapse: separate; border-spacing: 0 5px; }
-  thead th { text-align: left; padding: 5px 11px; font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
+  thead th { text-align: left; padding: 5px 11px; font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; position: sticky; top: 0; background: var(--surface2); z-index: 10; box-shadow: 0 1px 0 var(--border); }
   tbody tr { background: var(--surface); transition: background 0.15s; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
   tbody tr:hover { background: #f0f9ff; }
   tbody td { padding: 11px 11px; font-size: 13px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
@@ -268,7 +268,7 @@
       </div>
       <div class="tw">
         <table>
-          <thead><tr><th>Anticuerpo</th><th>Clon</th><th>SAF</th><th>Lote</th><th>Marca</th><th>Tipo</th><th>Validado</th><th>Vencimiento</th><th>Recepción</th><th>Apertura</th><th>Dilución / Vol.</th><th>Determinaciones</th><th>Vol. Restante</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Anticuerpo</th><th>Clon</th><th>SAF</th><th>Lote</th><th>Marca</th><th>Tipo</th><th>Validado</th><th>Vencimiento</th><th>Recepción</th><th>Apertura</th><th>Dilución / Vol.</th><th>Determinaciones</th><th>Det. Restantes</th><th>Acciones</th></tr></thead>
           <tbody id="tbody-stock"></tbody>
         </table>
         <div class="empty" id="empty-stock" style="display:none"><div style="font-size:44px;margin-bottom:10px">🧫</div><div style="font-size:15px;font-weight:600;margin-bottom:5px">Sin anticuerpos en stock</div><div style="font-size:12px">Usá "+ Agregar frasco" para comenzar</div></div>
@@ -581,7 +581,7 @@ function renderTable() {
       <td>${dets!==null?`<div class="dn">${dets}</div><div class="dl">det.</div>`:'—'}</td>
       <td>${volBar(i)}</td>
       <td><div class="acts">
-        ${i.Tipo==='concentrado'&&i.Volumen_uL?`<button class="ab" onclick="registerPrep('${i.ID}')" title="Registrar preparación (−2000µL)" style="background:rgba(2,132,199,0.08);border-color:rgba(2,132,199,0.2);color:var(--accent)">🧪 Prep</button>`:''}
+        ${i.Tipo==='concentrado'&&i.Volumen_uL&&i.Dilucion?`<button class="ab" onclick="registerPrep('${i.ID}')" title="Registrar preparación" style="background:rgba(2,132,199,0.08);border-color:rgba(2,132,199,0.2);color:var(--accent)">🧪 Prep</button>`:''}
         <button class="ab" onclick="editItem('${i.ID}')" title="Editar">✏️</button>
         <button class="ab" onclick="finishItem('${i.ID}')" title="Marcar acabado">✅</button>
         <button class="ab" onclick="deleteItem('${i.ID}')" title="Eliminar">🗑️</button>
@@ -764,107 +764,65 @@ function editItem(id){
 }
 async function registerPrep(id) {
   const i = stock.find(s=>s.ID===id); if(!i) return;
-  const dil = Math.round(parseFloat(i.Dilucion)) || 1;
-  const alq = Math.round(parseFloat(i.Aliquot_uL)) || 100;
-  const volInicial = Math.round(parseFloat(i.Volumen_uL)) || 0;
-  const volRestante = (i.VolumenRestante !== '' && !isNaN(parseInt(i.VolumenRestante))) ? parseInt(i.VolumenRestante) : volInicial;
+  const dil = parseInt(i.Dilucion) || 1;
+  const alq = parseInt(i.Aliquot_uL) || 100;
+  const vol = parseInt(i.Volumen_uL) || 0;
+  const detsPorPrep = Math.round(2000 / alq);
+  const volPorPrep  = Math.round(2000 / dil);
+  const totalPreps  = vol > 0 ? Math.floor(vol / volPorPrep) : 0;
+  const totalDets   = totalPreps * detsPorPrep;
+  const realizadas  = parseInt(i.Preparaciones) || 0;
+  const detsRestantes = (i.VolumenRestante !== '' && !isNaN(parseInt(i.VolumenRestante)) && realizadas > 0)
+    ? parseInt(i.VolumenRestante) : totalDets;
+  const despues = Math.max(0, detsRestantes - detsPorPrep);
+  const pctBar = totalDets > 0 ? Math.round(detsRestantes / totalDets * 100) : 100;
+  const color = pctBar <= 25 ? '#dc2626' : pctBar <= 50 ? '#d97706' : '#059669';
 
   const ex = document.getElementById('modal-prep'); if(ex) ex.remove();
   const modal = document.createElement('div');
   modal.id = 'modal-prep'; modal.className = 'overlay'; modal.style.display='flex';
-  modal.innerHTML = `
-    <div class="modal" style="max-width:400px">
-      <div class="mh"><div class="mt">🧪 Registrar preparación</div><button class="mc" onclick="document.getElementById('modal-prep').remove()">✕</button></div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
-        <strong style="color:var(--text)">${i.Anticuerpo}</strong>${i.Dilucion?' — Dilución 1:'+i.Dilucion:''}<br>
-        <span style="font-size:12px">Quedan <strong style="color:var(--accent)">${volRestante}µL</strong> de ${volInicial}µL en el frasco</span>
-      </div>
-      <div class="fi" style="margin-bottom:8px">
-        <label class="fl">¿Cuántos µL preparaste en total?</label>
-        <input class="finput" id="prep-vol-input" type="number" min="1" value="3000" style="font-size:20px;font-weight:700;text-align:center"/>
-      </div>
-      <div id="prep-preview" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px;text-align:center;margin-bottom:20px;font-size:13px;line-height:1.8"></div>
-      <div class="mf">
-        <button class="bcancel" onclick="document.getElementById('modal-prep').remove()">Cancelar</button>
-        <button class="bsave" onclick="confirmPrep('${id}')">✓ Registrar</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  const input = document.getElementById('prep-vol-input');
-  const preview = document.getElementById('prep-preview');
-  const update = () => {
-    const v = Math.round(parseFloat(input.value)) || 0;
-    if (v > 0 && dil > 0) {
-      const consumido = Math.round(v / dil);
-      const nuevoVol = Math.max(0, volRestante - consumido);
-      const prepsRestantes = consumido > 0 ? Math.floor(nuevoVol / consumido) : 0;
-      preview.innerHTML = `Consumís <strong style="color:var(--accent)">${consumido}µL</strong> del frasco (${v}µL ÷ ${dil})<br>
-        Quedarían <strong style="color:var(--accent)">${nuevoVol}µL</strong> → podés hacer <strong style="color:var(--success)">${prepsRestantes} preparaciones más</strong>`;
-    } else { preview.innerHTML = ''; }
-  };
-  input.addEventListener('input', update);
-  update();
-  input.focus(); input.select();
-}
-async function registerPrep(id) {
-  const i = stock.find(s=>s.ID===id); if(!i) return;
-  const dil = parseFloat(i.Dilucion) || 1;
-
-  // Show prep dialog
-  const ex = document.getElementById('modal-prep'); if(ex) ex.remove();
-  const modal = document.createElement('div');
-  modal.id = 'modal-prep'; modal.className = 'overlay'; modal.style.display='flex';
-  const volConsumidoEjemplo = (2000/dil).toFixed(1);
   modal.innerHTML = `
     <div class="modal" style="max-width:380px">
       <div class="mh"><div class="mt">🧪 Registrar preparación</div><button class="mc" onclick="document.getElementById('modal-prep').remove()">✕</button></div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
-        <strong style="color:var(--text)">${i.Anticuerpo}</strong> — Dilución 1:${i.Dilucion||'—'}<br>
-        <span style="font-size:12px">Ingresá cuántos µL totales preparaste. Se descontará del frasco la parte proporcional de anticuerpo.</span>
+      <div style="text-align:center;padding:8px 0 16px">
+        <div style="font-size:16px;font-weight:700;color:var(--text);margin-bottom:4px">${i.Anticuerpo}</div>
+        <div style="font-size:12px;color:var(--muted)">Dilución 1:${i.Dilucion||'—'} · 2000µL por preparación</div>
       </div>
-      <div class="fi" style="margin-bottom:20px">
-        <label class="fl">Volumen preparado (µL totales)</label>
-        <input class="finput" id="prep-vol-input" type="number" min="1" value="2000" style="font-size:18px;font-weight:700;text-align:center"/>
-        <div id="prep-calc-preview" style="font-size:12px;color:var(--muted);margin-top:6px;text-align:center"></div>
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:16px;margin-bottom:20px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:12px;color:var(--muted)">Determinaciones actuales</span>
+          <span style="font-size:14px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:${color}">${detsRestantes} / ${totalDets}</span>
+        </div>
+        <div style="background:#e2e8f0;border-radius:4px;height:8px;overflow:hidden;margin-bottom:12px">
+          <div style="height:100%;width:${pctBar}%;background:${color};border-radius:4px"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:12px;color:var(--muted)">Esta prep descuenta</span>
+          <span style="font-size:13px;font-weight:700;color:#dc2626">− ${detsPorPrep} det.</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span style="font-size:12px;color:var(--muted)">Quedarían</span>
+          <span style="font-size:13px;font-weight:700;color:#059669">${despues} det.</span>
+        </div>
       </div>
       <div class="mf">
         <button class="bcancel" onclick="document.getElementById('modal-prep').remove()">Cancelar</button>
-        <button class="bsave" onclick="confirmPrep('${id}', ${dil})">✓ Registrar</button>
+        <button class="bsave" onclick="confirmPrep('${id}')">✓ Registrar preparación</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
-
-  // Live preview
-  const input = document.getElementById('prep-vol-input');
-  const preview = document.getElementById('prep-calc-preview');
-  const updatePreview = () => {
-    const v = parseFloat(input.value);
-    if(v && dil) {
-      const consumido = (v/dil).toFixed(1);
-      const alq = parseFloat(i.Aliquot_uL)||100;
-      const detsConsumidas = Math.floor(v/alq);
-      const dil2 = parseFloat(i.Dilucion)||1;
-      const volRest = (i.VolumenRestante!==''&&i.VolumenRestante!==undefined&&!isNaN(parseFloat(i.VolumenRestante)))?parseFloat(i.VolumenRestante):parseFloat(i.Volumen_uL);
-      const detsRest = Math.max(0, Math.floor((volRest - v/dil2) * dil2 / alq));
-      preview.innerHTML = `Se usan <strong style="color:var(--accent)">${consumido}µL</strong> del frasco → <strong style="color:var(--accent)">${detsConsumidas} determinaciones</strong><br><span style="color:var(--muted)">Quedarían ${detsRest} det. restantes</span>`;
-    } else { preview.innerHTML=''; }
-  };
-  input.addEventListener('input', updatePreview);
-  updatePreview();
-  input.focus(); input.select();
 }
 
 async function confirmPrep(id) {
-  const prepVol = Math.round(parseFloat(document.getElementById('prep-vol-input').value));
-  if (!prepVol || prepVol <= 0) { showToast('Ingresá un volumen válido','err'); return; }
   document.getElementById('modal-prep').remove();
   try {
-    const res = await api({ action:'registerPrep', id, prepVol });
+    const res = await api({ action:'registerPrep', id });
     await loadData();
-    showToast(`✓ Preparación registrada — Quedan ${res.volRestante}µL · Podés hacer ${res.prepsRestantes} preps más`, res.prepsRestantes <= 2 ? 'inf' : 'ok');
-  } catch(e) { showToast('Error al registrar: ' + e.message, 'err'); }
+    const pct = res.totalDets > 0 ? res.detsRestantes / res.totalDets : 1;
+    showToast(`✓ Prep registrada — Quedan ${res.detsRestantes} de ${res.totalDets} determinaciones`, pct <= 0.5 ? 'inf' : 'ok');
+  } catch(e) { showToast('Error: ' + e.message, 'err'); }
 }
+
 async function finishItem(id){
   if(!confirm('¿Marcar este frasco como acabado?'))return;
   try{await api({action:'finishItem',id});showToast('Movido a acabados ✓','ok');await loadData();}catch(e){}
