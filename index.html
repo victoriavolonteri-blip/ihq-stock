@@ -485,13 +485,12 @@ function daysUntil(d) {
   return Math.ceil((new Date(d) - t) / 86400000);
 }
 function calcDets(vol, dil, alq) {
-  // vol = µL del frasco, dil = factor dilución, alq = µL por vidrio
-  // Cada prep usa 2000µL totales → consume (2000/dil) µL del frasco → rinde (2000/alq) determinaciones
+  // vol = µL del frasco, dil = factor dilución (1:X), alq = µL por vidrio
+  // µL de anticuerpo por vidrio = alq / dil
+  // total determinaciones = vol / (alq / dil) = vol * dil / alq
   vol=parseFloat(vol); dil=parseFloat(dil); alq=parseFloat(alq)||100;
   if(!vol||!dil||dil<=0) return null;
-  const volPorPrep = 2000 / dil;
-  const detPorPrep = 2000 / alq;
-  return Math.floor((vol / volPorPrep) * detPorPrep);
+  return Math.floor(vol * dil / alq);
 }
 function expBadge(d) {
   const days = daysUntil(d);
@@ -685,10 +684,8 @@ function calcPreview(){
   if(vol&&dil){
     const d=calcDets(vol,dil,alq);
     document.getElementById('calc-n').textContent=d??'—';
-    const volPorPrep=(2000/dil).toFixed(1);
-    const detPorPrep=Math.floor(2000/alq);
-    const preps=Math.floor(vol/(2000/dil));
-    document.getElementById('calc-info').innerHTML=`Cada prep usa ${volPorPrep}µL del frasco (2000÷${dil})<br>${preps} preps × ${detPorPrep} det/prep = <strong style="color:var(--accent)">${d} determinaciones totales</strong>`;
+    const ulPorVidrio = (alq/dil).toFixed(2);
+    document.getElementById('calc-info').innerHTML=`Cada vidrio usa ${ulPorVidrio}µL del frasco (${alq}µL ÷ ${dil})<br>${vol}µL ÷ ${ulPorVidrio}µL = <strong style="color:var(--accent)">${d} determinaciones totales</strong>`;
     box.style.display='flex';
   } else { box.style.display='none'; }
 }
@@ -755,12 +752,58 @@ function editItem(id){
   openModal('form');
 }
 async function registerPrep(id) {
-  if (!confirm('¿Registrar una preparación? Se descontarán 2000µL del frasco.')) return;
+  const i = stock.find(s=>s.ID===id); if(!i) return;
+  const dil = parseFloat(i.Dilucion) || 1;
+
+  // Show prep dialog
+  const ex = document.getElementById('modal-prep'); if(ex) ex.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-prep'; modal.className = 'overlay'; modal.style.display='flex';
+  const volConsumidoEjemplo = (2000/dil).toFixed(1);
+  modal.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <div class="mh"><div class="mt">🧪 Registrar preparación</div><button class="mc" onclick="document.getElementById('modal-prep').remove()">✕</button></div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+        <strong style="color:var(--text)">${i.Anticuerpo}</strong> — Dilución 1:${i.Dilucion||'—'}<br>
+        <span style="font-size:12px">Ingresá cuántos µL totales preparaste. Se descontará del frasco la parte proporcional de anticuerpo.</span>
+      </div>
+      <div class="fi" style="margin-bottom:20px">
+        <label class="fl">Volumen preparado (µL totales)</label>
+        <input class="finput" id="prep-vol-input" type="number" min="1" value="2000" style="font-size:18px;font-weight:700;text-align:center"/>
+        <div id="prep-calc-preview" style="font-size:12px;color:var(--muted);margin-top:6px;text-align:center"></div>
+      </div>
+      <div class="mf">
+        <button class="bcancel" onclick="document.getElementById('modal-prep').remove()">Cancelar</button>
+        <button class="bsave" onclick="confirmPrep('${id}', ${dil})">✓ Registrar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  // Live preview
+  const input = document.getElementById('prep-vol-input');
+  const preview = document.getElementById('prep-calc-preview');
+  const updatePreview = () => {
+    const v = parseFloat(input.value);
+    if(v && dil) {
+      const consumido = (v/dil).toFixed(1);
+      preview.innerHTML = `Se descontarán <strong style="color:var(--accent)">${consumido}µL</strong> del frasco (${v}µL ÷ ${dil})`;
+    } else { preview.innerHTML=''; }
+  };
+  input.addEventListener('input', updatePreview);
+  updatePreview();
+  input.focus(); input.select();
+}
+
+async function confirmPrep(id, dil) {
+  const prepVol = parseFloat(document.getElementById('prep-vol-input').value);
+  if (!prepVol || prepVol <= 0) { showToast('Ingresá un volumen válido','err'); return; }
+  document.getElementById('modal-prep').remove();
   try {
-    const res = await api({ action:'registerPrep', id });
+    const res = await api({ action:'registerPrep', id, prepVol });
     await loadData();
+    const consumido = (prepVol/dil).toFixed(1);
     const pct = (res.volRestante / res.volInicial) * 100;
-    showToast(`Preparación registrada — Quedan ${Math.round(res.volRestante)}µL (${Math.round(pct)}%) ✓`, pct<=50?'inf':'ok');
+    showToast(`Prep registrada — Se usaron ${consumido}µL del frasco. Quedan ${Math.round(res.volRestante)}µL (${Math.round(pct)}%) ✓`, pct<=50?'inf':'ok');
   } catch(e) {}
 }
 async function finishItem(id){
