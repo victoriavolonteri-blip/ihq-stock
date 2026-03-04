@@ -485,9 +485,13 @@ function daysUntil(d) {
   return Math.ceil((new Date(d) - t) / 86400000);
 }
 function calcDets(vol, dil, alq) {
+  // vol = µL del frasco, dil = factor dilución, alq = µL por vidrio
+  // Cada prep usa 2000µL totales → consume (2000/dil) µL del frasco → rinde (2000/alq) determinaciones
   vol=parseFloat(vol); dil=parseFloat(dil); alq=parseFloat(alq)||100;
   if(!vol||!dil||dil<=0) return null;
-  return Math.floor((vol/dil)/alq);
+  const volPorPrep = 2000 / dil;
+  const detPorPrep = 2000 / alq;
+  return Math.floor((vol / volPorPrep) * detPorPrep);
 }
 function expBadge(d) {
   const days = daysUntil(d);
@@ -681,7 +685,10 @@ function calcPreview(){
   if(vol&&dil){
     const d=calcDets(vol,dil,alq);
     document.getElementById('calc-n').textContent=d??'—';
-    document.getElementById('calc-info').innerHTML=`${vol}µL ÷ ${dil} = ${(vol/dil).toFixed(1)}µL<br>${(vol/dil).toFixed(1)} ÷ ${alq}µL = <strong style="color:var(--accent)">${d} det.</strong>`;
+    const volPorPrep=(2000/dil).toFixed(1);
+    const detPorPrep=Math.floor(2000/alq);
+    const preps=Math.floor(vol/(2000/dil));
+    document.getElementById('calc-info').innerHTML=`Cada prep usa ${volPorPrep}µL del frasco (2000÷${dil})<br>${preps} preps × ${detPorPrep} det/prep = <strong style="color:var(--accent)">${d} determinaciones totales</strong>`;
     box.style.display='flex';
   } else { box.style.display='none'; }
 }
