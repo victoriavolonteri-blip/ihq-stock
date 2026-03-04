@@ -878,7 +878,6 @@ function fillFormFromRemito(item) {
 }
 
 function showRemitoModal(items) {
-  // Create a temporary modal to show all detected antibodies
   const existing = document.getElementById('modal-remito');
   if (existing) existing.remove();
 
@@ -887,28 +886,93 @@ function showRemitoModal(items) {
   modal.className = 'overlay';
   modal.style.display = 'flex';
   modal.innerHTML = `
-    <div class="modal" style="max-width:560px">
+    <div class="modal" style="max-width:620px">
       <div class="mh">
         <div class="mt">📋 Anticuerpos detectados en el remito</div>
         <button class="mc" onclick="document.getElementById('modal-remito').remove()">✕</button>
       </div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">Se encontraron <strong style="color:var(--text)">${items.length} anticuerpos</strong>. Hacé clic en uno para abrirlo en el formulario y guardarlo.</div>
-      <div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px">
+        Se encontraron <strong style="color:var(--text)">${items.length} anticuerpos</strong>. 
+        Verificá la cantidad de frascos de cada uno y hacé clic en Guardar todos.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:380px;overflow-y:auto;margin-bottom:16px;">
         ${items.map((item,idx) => `
-          <div onclick="fillFormFromRemito(${JSON.stringify(item).replace(/"/g,'&quot;')}); document.getElementById('modal-remito').remove(); openModal('form'); showToast('Revisá y completá los datos','inf');"
-            style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:13px 15px;cursor:pointer;transition:background 0.15s;"
+          <label style="display:flex;align-items:center;gap:12px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:13px 15px;cursor:pointer;transition:background 0.15s;"
             onmouseover="this.style.background='#e0f2fe'" onmouseout="this.style.background='#f8fafc'">
-            <div style="font-weight:700;font-size:14px">${item.Anticuerpo}</div>
-            <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:3px">
-              ${item.Clon?'Clon: '+item.Clon+' · ':''}Lote: ${item.Lote||'—'} · Vence: ${item.Vencimiento||'—'}
+            <input type="checkbox" id="rem-chk-${idx}" checked style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer;flex-shrink:0"/>
+            <div style="flex:1">
+              <div style="font-weight:700;font-size:14px">${item.Anticuerpo}</div>
+              <div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:3px">
+                ${item.Clon?'Clon: '+item.Clon+' · ':''}Lote: ${item.Lote||'—'} · Vence: ${item.Vencimiento||'—'} · ${item.Marca||''}
+              </div>
             </div>
-          </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Frascos:</span>
+              <input type="number" id="rem-qty-${idx}" value="${item.Cantidad||1}" min="1" max="99"
+                onclick="event.stopPropagation()"
+                style="width:52px;text-align:center;background:white;border:1px solid var(--border);border-radius:6px;padding:5px;font-size:13px;font-weight:700;color:var(--accent);font-family:'IBM Plex Mono',monospace;outline:none"/>
+            </div>
+          </label>
         `).join('')}
       </div>
-      <div style="margin-top:16px;font-size:12px;color:var(--muted);text-align:center">Guardá cada frasco por separado revisando los datos</div>
+      <div style="display:flex;gap:10px;">
+        <button onclick="document.getElementById('modal-remito').remove()" 
+          style="flex:1;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:11px;color:var(--muted);font-weight:600;cursor:pointer;font-size:13px;font-family:'IBM Plex Sans',sans-serif;">
+          Cancelar
+        </button>
+        <button onclick="saveRemitoItems(${JSON.stringify(items).replace(/"/g,'&quot;')})"
+          style="flex:2;background:linear-gradient(135deg,#0284c7,#0ea5e9);border:none;border-radius:8px;padding:11px;color:white;font-weight:700;cursor:pointer;font-size:13px;font-family:'IBM Plex Sans',sans-serif;">
+          ✅ Guardar seleccionados
+        </button>
+      </div>
     </div>
   `;
   document.body.appendChild(modal);
+}
+
+async function saveRemitoItems(items) {
+  const today = new Date().toISOString().slice(0,10);
+  const rows = [];
+
+  items.forEach((item, idx) => {
+    const chk = document.getElementById(`rem-chk-${idx}`);
+    if (!chk || !chk.checked) return;
+    const qty = parseInt(document.getElementById(`rem-qty-${idx}`)?.value) || 1;
+    for (let i = 0; i < qty; i++) {
+      rows.push({
+        Anticuerpo: item.Anticuerpo || '',
+        Clon:       item.Clon || '',
+        Lote:       item.Lote || '',
+        Marca:      item.Marca || '',
+        Tipo:       item.Tipo === 'prediluido' ? 'prediluido' : 'concentrado',
+        Vencimiento: item.Vencimiento || '',
+        Recepcion:  today,
+        Apertura:   '',
+        Volumen_uL: item.Volumen_uL || '',
+        Dilucion:   item.Dilucion || '',
+        Aliquot_uL: '100',
+        SAF:        '',
+        Validado:   'No',
+        Notas:      item.Notas || '',
+      });
+    }
+  });
+
+  if (!rows.length) { showToast('No seleccionaste ningún anticuerpo', 'err'); return; }
+
+  document.getElementById('modal-remito').remove();
+  document.getElementById('loading-text').textContent = `Guardando ${rows.length} frascos...`;
+  document.getElementById('loading-overlay').style.display = 'flex';
+
+  try {
+    const res = await api({ action: 'importBatch', rows });
+    document.getElementById('loading-overlay').style.display = 'none';
+    await loadData();
+    showToast(`${res.imported} frascos agregados al stock ✓`, 'ok');
+  } catch(e) {
+    document.getElementById('loading-overlay').style.display = 'none';
+    showToast('Error al guardar: ' + e.message, 'err');
+  }
 }
 
 // ---- IMPORT EXCEL ----
