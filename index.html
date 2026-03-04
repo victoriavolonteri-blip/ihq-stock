@@ -331,8 +331,7 @@
       <div class="fi"><label class="fl">Fecha de apertura</label><input class="finput" type="date" id="f-open"/></div>
       <div class="fi" id="g-vol"><label class="fl">Contenido frasco (µL) — referencia</label><input class="finput" type="number" id="f-vol" placeholder="ej: 1000" oninput="calcPreview()"/></div>
       <div class="fi" id="g-dil"><label class="fl">Dilución (1 : X) — referencia</label><input class="finput" type="number" id="f-dil" placeholder="ej: 100" oninput="calcPreview()"/></div>
-      <div class="fi" id="g-alq"><label class="fl">µL por determinación — referencia</label><input class="finput" type="number" id="f-alq" value="100" oninput="calcPreview()"/></div>
-      <div class="fi" id="g-preps"><label class="fl">Preparaciones que rinde el frasco *</label><input class="finput" type="number" id="f-preps" placeholder="ej: 8" min="1" oninput="calcPreview()"/></div>
+      <div class="fi" id="g-alq"><label class="fl">µL por determinación</label><input class="finput" type="number" id="f-alq" value="100" oninput="calcPreview()"/></div>
       <div class="calc-box" id="calc-box" style="display:none"><div><div class="calc-n" id="calc-n">—</div><div class="dl">preparaciones</div></div><div class="calc-info" id="calc-info"></div></div>
       <div class="fi"><label class="fl">Código SAF</label><input class="finput" id="f-saf" placeholder="Código interno SAF"/></div>
       <div class="fi"><label class="fl">Validado</label>
@@ -694,11 +693,19 @@ function toggleConc(){
   document.getElementById('calc-box').style.display='none';
 }
 function calcPreview(){
-  const preps=parseInt(document.getElementById('f-preps').value);
-  const box=document.getElementById('calc-box');
-  if(preps&&preps>0){
-    document.getElementById('calc-n').textContent=preps;
-    document.getElementById('calc-info').innerHTML=`Este frasco rinde <strong style="color:var(--accent)">${preps} preparaciones</strong>`;
+  const vol = parseFloat(document.getElementById('f-vol').value);
+  const dil = parseFloat(document.getElementById('f-dil').value);
+  const alq = parseFloat(document.getElementById('f-alq').value)||100;
+  const box = document.getElementById('calc-box');
+  if(vol && dil){
+    const volPorPrep  = Math.round(2000/dil);
+    const detsPorPrep = Math.round(2000/alq);
+    const totalPreps  = Math.floor(vol/volPorPrep);
+    const totalDets   = totalPreps * detsPorPrep;
+    document.getElementById('calc-n').textContent = totalDets;
+    document.getElementById('calc-info').innerHTML =
+      `${totalPreps} preparaciones × ${detsPorPrep} det/prep<br>` +
+      `<span style="font-size:11px;color:var(--muted)">(cada prep usa ${volPorPrep}µL del frasco)</span>`;
     box.style.display='flex';
   } else { box.style.display='none'; }
 }
