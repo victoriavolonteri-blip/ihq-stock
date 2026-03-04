@@ -801,7 +801,12 @@ async function registerPrep(id) {
     const v = parseFloat(input.value);
     if(v && dil) {
       const consumido = (v/dil).toFixed(1);
-      preview.innerHTML = `Se descontarán <strong style="color:var(--accent)">${consumido}µL</strong> del frasco (${v}µL ÷ ${dil})`;
+      const alq = parseFloat(i.Aliquot_uL)||100;
+      const detsConsumidas = Math.floor(v/alq);
+      const dil2 = parseFloat(i.Dilucion)||1;
+      const volRest = (i.VolumenRestante!==''&&i.VolumenRestante!==undefined&&!isNaN(parseFloat(i.VolumenRestante)))?parseFloat(i.VolumenRestante):parseFloat(i.Volumen_uL);
+      const detsRest = Math.max(0, Math.floor((volRest - v/dil2) * dil2 / alq));
+      preview.innerHTML = `Se usan <strong style="color:var(--accent)">${consumido}µL</strong> del frasco → <strong style="color:var(--accent)">${detsConsumidas} determinaciones</strong><br><span style="color:var(--muted)">Quedarían ${detsRest} det. restantes</span>`;
     } else { preview.innerHTML=''; }
   };
   input.addEventListener('input', updatePreview);
@@ -816,12 +821,7 @@ async function confirmPrep(id, dil) {
   try {
     const res = await api({ action:'registerPrep', id, prepVol });
     await loadData();
-    // Recalculate remaining dets from updated item
-    const updated = stock.find(s=>s.ID===id);
-    const alq = parseFloat(updated?.Aliquot_uL)||100;
-    const detsRest = updated ? Math.max(0, Math.floor(parseFloat(updated.VolumenRestante||0) * dil / alq)) : '?';
-    const totalDets = updated ? Math.floor(parseFloat(updated.Volumen_uL) * dil / alq) : '?';
-    showToast(`Prep registrada — Quedan ${detsRest} de ${totalDets} determinaciones ✓`, 'ok');
+    showToast(`Prep registrada — ${res.detsConsumidas} det. usadas. Quedan ${res.detsRestantes} de ${res.totalDets} ✓`, res.detsRestantes <= res.totalDets/2 ? 'inf' : 'ok');
   } catch(e) {}
 }
 async function finishItem(id){
