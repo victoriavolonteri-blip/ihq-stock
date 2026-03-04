@@ -689,7 +689,7 @@ function resetForm(){
 }
 function toggleConc(){
   const c=document.getElementById('f-type').value==='concentrado';
-  ['g-vol','g-dil','g-alq','g-preps'].forEach(id=>document.getElementById(id).style.display=c?'flex':'none');
+  ['g-vol','g-dil','g-alq'].forEach(id=>document.getElementById(id).style.display=c?'flex':'none');
   document.getElementById('calc-box').style.display='none';
 }
 function calcPreview(){
@@ -728,7 +728,7 @@ async function saveItem(){
     Volumen_uL:document.getElementById('f-vol').value,
     Dilucion:document.getElementById('f-dil').value,
     Aliquot_uL:document.getElementById('f-alq').value||'100',
-    PrepsTotales:document.getElementById('f-preps').value,
+    PrepsTotales:'',
     Notas:document.getElementById('f-notes').value,
   };
   try{
@@ -765,7 +765,6 @@ function editItem(id){
   document.getElementById('f-vol').value=i.Volumen_uL||'';
   document.getElementById('f-dil').value=i.Dilucion||'';
   document.getElementById('f-alq').value=i.Aliquot_uL||'100';
-  document.getElementById('f-preps').value=i.PrepsTotales||'';
   document.getElementById('f-notes').value=i.Notas||'';
   openModal('form');
 }
