@@ -249,6 +249,7 @@
     <div class="tabs">
       <div class="tab active" id="tab-stock" onclick="switchTab('stock')">📦 STOCK ACTIVO</div>
       <div class="tab" id="tab-finished" onclick="switchTab('finished')">✅ ACABADOS</div>
+      <div class="tab" id="tab-orders" onclick="switchTab('orders')">🛒 PEDIDOS</div>
     </div>
 
     <div id="panel-stock">
@@ -267,7 +268,7 @@
       </div>
       <div class="tw">
         <table>
-          <thead><tr><th>Anticuerpo</th><th>Clon</th><th>SAF</th><th>Lote</th><th>Marca</th><th>Tipo</th><th>Validado</th><th>Vencimiento</th><th>Recepción</th><th>Apertura</th><th>Dilución / Vol.</th><th>Determinaciones</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Anticuerpo</th><th>Clon</th><th>SAF</th><th>Lote</th><th>Marca</th><th>Tipo</th><th>Validado</th><th>Vencimiento</th><th>Recepción</th><th>Apertura</th><th>Dilución / Vol.</th><th>Determinaciones</th><th>Vol. Restante</th><th>Acciones</th></tr></thead>
           <tbody id="tbody-stock"></tbody>
         </table>
         <div class="empty" id="empty-stock" style="display:none"><div style="font-size:44px;margin-bottom:10px">🧫</div><div style="font-size:15px;font-weight:600;margin-bottom:5px">Sin anticuerpos en stock</div><div style="font-size:12px">Usá "+ Agregar frasco" para comenzar</div></div>
@@ -285,6 +286,25 @@
           <tbody id="tbody-finished"></tbody>
         </table>
         <div class="empty" id="empty-finished" style="display:none"><div style="font-size:44px;margin-bottom:10px">📋</div><div style="font-size:15px;font-weight:600">Sin frascos acabados</div></div>
+      </div>
+    </div>
+
+    <!-- ORDERS PANEL -->
+    <div id="panel-orders" style="display:none">
+      <div class="toolbar" style="padding-top:16px">
+        <button class="btn-reload" onclick="loadData()">↻ Actualizar</button>
+        <button class="btn-add" onclick="openModal('order')" style="font-size:12px;padding:8px 14px">+ Nuevo pedido</button>
+        <label class="btn-scan" style="cursor:pointer;font-size:12px;padding:8px 14px" title="Leer pedido con IA">
+          📷 Leer pedido
+          <input type="file" id="inp-order-scan" accept="image/*" capture="environment" style="display:none" onchange="scanOrder(event)"/>
+        </label>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th>Anticuerpo</th><th>SAF</th><th>Cantidad</th><th>Fecha Pedido</th><th>Estado</th><th>Notas</th><th>Fecha Recepción</th><th>Acciones</th></tr></thead>
+          <tbody id="tbody-orders"></tbody>
+        </table>
+        <div class="empty" id="empty-orders" style="display:none"><div style="font-size:44px;margin-bottom:10px">🛒</div><div style="font-size:15px;font-weight:600">Sin pedidos registrados</div><div style="font-size:12px">Usá "+ Nuevo pedido" para registrar</div></div>
       </div>
     </div>
   </main>
@@ -370,9 +390,27 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- Order Modal -->
+<div class="overlay" id="modal-order" style="display:none" onclick="if(event.target===this)closeModal('order')">
+  <div class="modal" style="max-width:440px">
+    <div class="mh"><div class="mt" id="order-title">🛒 Nuevo pedido</div><button class="mc" onclick="closeModal('order')">✕</button></div>
+    <div class="fg">
+      <div class="fi full"><label class="fl">Anticuerpo *</label><input class="finput" id="o-ab" placeholder="ej: Ki-67, CD20..."/></div>
+      <div class="fi"><label class="fl">SAF</label><input class="finput" id="o-saf" placeholder="Código SAF"/></div>
+      <div class="fi"><label class="fl">Cantidad (frascos)</label><input class="finput" id="o-qty" type="number" min="1" value="1"/></div>
+      <div class="fi"><label class="fl">Fecha de pedido</label><input class="finput" id="o-date" type="date"/></div>
+      <div class="fi full"><label class="fl">Notas</label><textarea class="fta" id="o-notes" rows="2" placeholder="Observaciones..."></textarea></div>
+    </div>
+    <div class="mf">
+      <button class="bcancel" onclick="closeModal('order')">Cancelar</button>
+      <button class="bsave" id="btn-save-order" onclick="saveOrder()">Guardar pedido</button>
+    </div>
+  </div>
+</div>
+
 <script>
 let SCRIPT_URL = '', ANTHROPIC_KEY = '';
-let stock = [], finished = [], editId = null, curFilter = 'all';
+let stock = [], finished = [], orders = [], editId = null, editOrderId = null, curFilter = 'all';
 
 // ---- SETUP ----
 function connectSheets() {
@@ -431,8 +469,9 @@ async function loadData() {
   document.getElementById('loading-overlay').style.display = 'flex';
   try {
     const data = await api({ action:'getAll' });
-    stock = data.stock || [];
+    stock    = data.stock    || [];
     finished = data.finished || [];
+    orders   = data.orders   || [];
     renderAll();
     showToast('Datos actualizados ✓', 'ok');
   } catch(e) {}
@@ -466,13 +505,24 @@ function getAlerts() {
     if(d!==null&&d<0) res.push({type:'exp',item:i,days:d});
     else if(d!==null&&d<=60) res.push({type:'soon',item:i,days:d});
     if(i.Validado!=='Si') res.push({type:'noval',item:i});
+    // Volume alert: less than 50% remaining
+    if(i.Tipo==='concentrado' && i.Volumen_uL && i.VolumenRestante!=='' && i.VolumenRestante!==undefined) {
+      const pct = parseFloat(i.VolumenRestante) / parseFloat(i.Volumen_uL);
+      if(!isNaN(pct) && pct <= 0.5 && parseFloat(i.VolumenRestante) > 0) res.push({type:'lowvol',item:i,pct});
+    }
   });
   Object.entries(cnt).forEach(([name,n])=>{ if(n===1) res.push({type:'last',item:stock.find(s=>s.Anticuerpo===name)}); });
   return res;
 }
 
 // ---- RENDER ----
-function renderAll() { renderStats(); renderTable(); renderFinished(); renderAlertBtn(); }
+function renderAll() { renderStats(); renderTable(); renderFinished(); renderOrders(); renderAlertBtn(); }
+function switchTab(t) {
+  ['stock','finished','orders'].forEach(n=>{
+    document.getElementById('tab-'+n).classList.toggle('active', n===t);
+    document.getElementById('panel-'+n).style.display = n===t?'block':'none';
+  });
+}
 function renderStats() {
   const al=getAlerts().length;
   const uniqueAbs = new Set(stock.map(i=>i.Anticuerpo)).size;
@@ -514,7 +564,9 @@ function renderTable() {
       <td style="font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${i.Apertura||'—'}</td>
       <td>${i.Tipo==='concentrado'&&i.Dilucion?`<div style="font-family:'IBM Plex Mono',monospace;font-size:12px">1 : ${i.Dilucion}</div><div style="font-size:11px;color:var(--muted)">${i.Volumen_uL||''}µL</div>`:'—'}</td>
       <td>${dets!==null?`<div class="dn">${dets}</div><div class="dl">det.</div>`:'—'}</td>
+      <td>${volBar(i)}</td>
       <td><div class="acts">
+        ${i.Tipo==='concentrado'&&i.Volumen_uL?`<button class="ab" onclick="registerPrep('${i.ID}')" title="Registrar preparación (−2000µL)" style="background:rgba(2,132,199,0.08);border-color:rgba(2,132,199,0.2);color:var(--accent)">🧪 Prep</button>`:''}
         <button class="ab" onclick="editItem('${i.ID}')" title="Editar">✏️</button>
         <button class="ab" onclick="finishItem('${i.ID}')" title="Marcar acabado">✅</button>
         <button class="ab" onclick="deleteItem('${i.ID}')" title="Eliminar">🗑️</button>
@@ -541,6 +593,52 @@ function renderFinished() {
     <td><button class="ab" onclick="removeFinished('${i.ID}')">🗑️</button></td>
   </tr>`).join('');
 }
+
+function volBar(i) {
+  if (i.Tipo !== 'concentrado' || !i.Volumen_uL) return '—';
+  const total = parseFloat(i.Volumen_uL);
+  const rest  = i.VolumenRestante !== '' && i.VolumenRestante !== undefined ? parseFloat(i.VolumenRestante) : total;
+  if (isNaN(total) || total === 0) return '—';
+  const pct = Math.max(0, Math.min(100, (rest / total) * 100));
+  const preps = parseInt(i.Preparaciones) || 0;
+  const color = pct <= 25 ? 'var(--danger)' : pct <= 50 ? 'var(--warn)' : 'var(--success)';
+  return `<div style="min-width:90px">
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;font-family:'IBM Plex Mono',monospace">
+      <span style="color:${color};font-weight:700">${Math.round(rest)}µL</span>
+      <span>${preps} prep${preps!==1?'s':''}</span>
+    </div>
+    <div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;transition:width 0.3s"></div>
+    </div>
+    ${pct<=50&&rest>0?`<div style="font-size:9px;color:${color};font-weight:700;margin-top:2px">⚠ MITAD</div>`:''}
+  </div>`;
+}
+
+function renderOrders() {
+  const tbody = document.getElementById('tbody-orders');
+  const empty = document.getElementById('empty-orders');
+  if (!tbody) return;
+  if (!orders.length) { tbody.innerHTML=''; empty.style.display='block'; return; }
+  empty.style.display = 'none';
+  tbody.innerHTML = orders.map(o => {
+    const isPending = o.Estado === 'Pendiente';
+    return `<tr style="${isPending?'':'opacity:0.65'}">
+      <td style="font-weight:700">${o.Anticuerpo}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--accent)">${o.SAF||'—'}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:700;text-align:center">${o.Cantidad||'1'}</td>
+      <td style="font-size:12px;font-family:'IBM Plex Mono',monospace">${o.FechaPedido||'—'}</td>
+      <td><span class="badge ${isPending?'bo':'bg'}">${isPending?'⏳ PENDIENTE':'✓ RECIBIDO'}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${o.Notas||'—'}</td>
+      <td style="font-size:12px;font-family:'IBM Plex Mono',monospace;color:var(--muted)">${o.FechaRecepcion||'—'}</td>
+      <td><div class="acts">
+        ${isPending?`<button class="ab" onclick="receiveOrder('${o.ID}')" title="Marcar recibido" style="background:rgba(5,150,105,0.08);border-color:rgba(5,150,105,0.25);color:var(--success)">✅ Recibido</button>`:''}
+        <button class="ab" onclick="editOrder('${o.ID}')" title="Editar">✏️</button>
+        <button class="ab" onclick="deleteOrder('${o.ID}')" title="Eliminar">🗑️</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
 function renderAlertBtn() {
   const al=getAlerts();
   const btn=document.getElementById('alert-btn'),lbl=document.getElementById('alert-lbl'),cnt=document.getElementById('alert-cnt');
@@ -549,12 +647,6 @@ function renderAlertBtn() {
 }
 
 // ---- TABS/FILTER ----
-function switchTab(t) {
-  document.getElementById('panel-stock').style.display=t==='stock'?'block':'none';
-  document.getElementById('panel-finished').style.display=t==='finished'?'block':'none';
-  document.getElementById('tab-stock').className='tab'+(t==='stock'?' active':'');
-  document.getElementById('tab-finished').className='tab'+(t==='finished'?' active':'');
-}
 function setFilter(f) {
   curFilter=f;
   ['all','concentrado','prediluido'].forEach(k=>{document.getElementById('f-'+k).className='flt'+(k===f?' on':'');});
@@ -562,13 +654,11 @@ function setFilter(f) {
 }
 
 // ---- FORM ----
-function openModal(n) {
-  if(n==='form'){document.getElementById('form-title').textContent=editId?'✏️ Editar frasco':'🧪 Nuevo frasco';toggleConc();calcPreview();}
-  if(n==='alerts') renderAlertsModal();
-  if(n==='share') document.getElementById('share-url-display').textContent = SCRIPT_URL || '(no hay URL guardada)';
-  document.getElementById('modal-'+n).style.display='flex';
+function closeModal(n){
+  document.getElementById('modal-'+n).style.display='none';
+  if(n==='form') resetForm();
+  if(n==='order') resetOrderForm();
 }
-function closeModal(n){document.getElementById('modal-'+n).style.display='none';if(n==='form')resetForm();}
 function resetForm(){
   editId=null;
   ['f-ab','f-lot','f-clon','f-saf','f-notes'].forEach(id=>document.getElementById(id).value='');
@@ -657,6 +747,15 @@ function editItem(id){
   document.getElementById('f-notes').value=i.Notas||'';
   openModal('form');
 }
+async function registerPrep(id) {
+  if (!confirm('¿Registrar una preparación? Se descontarán 2000µL del frasco.')) return;
+  try {
+    const res = await api({ action:'registerPrep', id });
+    await loadData();
+    const pct = (res.volRestante / res.volInicial) * 100;
+    showToast(`Preparación registrada — Quedan ${Math.round(res.volRestante)}µL (${Math.round(pct)}%) ✓`, pct<=50?'inf':'ok');
+  } catch(e) {}
+}
 async function finishItem(id){
   if(!confirm('¿Marcar este frasco como acabado?'))return;
   try{await api({action:'finishItem',id});showToast('Movido a acabados ✓','ok');await loadData();}catch(e){}
@@ -669,20 +768,139 @@ async function removeFinished(id){
   try{await api({action:'removeFinished',id});await loadData();}catch(e){}
 }
 
+// ---- ORDERS CRUD ----
+function openModal(n) {
+  if(n==='form'){document.getElementById('form-title').textContent=editId?'✏️ Editar frasco':'🧪 Nuevo frasco';toggleConc();calcPreview();}
+  if(n==='order'){document.getElementById('order-title').textContent=editOrderId?'✏️ Editar pedido':'🛒 Nuevo pedido'; if(!editOrderId) resetOrderForm();}
+  if(n==='alerts') renderAlertsModal();
+  if(n==='share') document.getElementById('share-url-display').textContent = SCRIPT_URL || '(no hay URL guardada)';
+  document.getElementById('modal-'+n).style.display='flex';
+}
+function closeModal(n){
+  document.getElementById('modal-'+n).style.display='none';
+  if(n==='form') resetForm();
+  if(n==='order') resetOrderForm();
+}
+function resetOrderForm() {
+  editOrderId = null;
+  document.getElementById('o-ab').value='';
+  document.getElementById('o-saf').value='';
+  document.getElementById('o-qty').value='1';
+  document.getElementById('o-date').value=new Date().toISOString().slice(0,10);
+  document.getElementById('o-notes').value='';
+}
+function editOrder(id) {
+  const o = orders.find(x=>x.ID===id); if(!o) return;
+  editOrderId = id;
+  document.getElementById('o-ab').value = o.Anticuerpo||'';
+  document.getElementById('o-saf').value = o.SAF||'';
+  document.getElementById('o-qty').value = o.Cantidad||'1';
+  document.getElementById('o-date').value = o.FechaPedido||'';
+  document.getElementById('o-notes').value = o.Notas||'';
+  openModal('order');
+}
+async function saveOrder() {
+  const btn = document.getElementById('btn-save-order');
+  btn.disabled=true; btn.textContent='Guardando...';
+  const payload = {
+    action: editOrderId ? 'updateOrder' : 'addOrder',
+    ID: editOrderId,
+    Anticuerpo: document.getElementById('o-ab').value.trim(),
+    SAF:        document.getElementById('o-saf').value.trim(),
+    Cantidad:   document.getElementById('o-qty').value,
+    FechaPedido:document.getElementById('o-date').value,
+    Notas:      document.getElementById('o-notes').value.trim(),
+  };
+  if (!payload.Anticuerpo) { showToast('Completá el nombre del anticuerpo','err'); btn.disabled=false; btn.textContent='Guardar pedido'; return; }
+  try {
+    await api(payload);
+    showToast(editOrderId?'Pedido actualizado ✓':'Pedido registrado ✓','ok');
+    closeModal('order');
+    await loadData();
+  } catch(e) {}
+  btn.disabled=false; btn.textContent='Guardar pedido';
+}
+async function receiveOrder(id) {
+  if (!confirm('¿Marcar este pedido como recibido?')) return;
+  try { await api({action:'receiveOrder',id}); showToast('Pedido marcado como recibido ✓','ok'); await loadData(); } catch(e) {}
+}
+async function deleteOrder(id) {
+  if (!confirm('¿Eliminar este pedido?')) return;
+  try { await api({action:'deleteOrder',id}); showToast('Pedido eliminado','inf'); await loadData(); } catch(e) {}
+}
+async function scanOrder(event) {
+  const file = event.target.files[0]; if(!file) return;
+  event.target.value='';
+  if (!ANTHROPIC_KEY) { showToast('Falta la API key de Anthropic','err'); return; }
+  document.getElementById('loading-text').textContent='📷 Leyendo pedido con IA...';
+  document.getElementById('loading-overlay').style.display='flex';
+  try {
+    const base64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(file);});
+    const response = await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':ANTHROPIC_KEY,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:file.type||'image/jpeg',data:base64}},{type:'text',text:'Este es un pedido de anticuerpos para IHQ. Extraé los anticuerpos pedidos. Respondé SOLO con JSON sin backticks: {"items":[{"Anticuerpo":"nombre","SAF":"codigo o vacio","Cantidad":1,"Notas":""}]}'}]}]})});
+    const data = await response.json();
+    if(data.error) throw new Error(data.error.message);
+    const text = data.content?.map(c=>c.text||'').join('')||'';
+    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    const items = parsed.items||[parsed];
+    document.getElementById('loading-overlay').style.display='none';
+    showOrderScanModal(items);
+  } catch(e) {
+    document.getElementById('loading-overlay').style.display='none';
+    showToast('Error al leer el pedido: '+e.message,'err');
+  }
+}
+function showOrderScanModal(items) {
+  const ex=document.getElementById('modal-orderscan'); if(ex) ex.remove();
+  const modal=document.createElement('div');
+  modal.id='modal-orderscan'; modal.className='overlay'; modal.style.display='flex';
+  modal.innerHTML=`<div class="modal" style="max-width:500px">
+    <div class="mh"><div class="mt">🛒 Anticuerpos detectados en el pedido</div><button class="mc" onclick="document.getElementById('modal-orderscan').remove()">✕</button></div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:14px">Verificá las cantidades y guardá.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;margin-bottom:16px">
+      ${items.map((it,idx)=>`<label style="display:flex;align-items:center;gap:10px;background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:12px;cursor:pointer" onmouseover="this.style.background='#e0f2fe'" onmouseout="this.style.background='#f8fafc'">
+        <input type="checkbox" id="osc-chk-${idx}" checked style="width:15px;height:15px;accent-color:var(--accent);flex-shrink:0"/>
+        <div style="flex:1"><div style="font-weight:700">${it.Anticuerpo}</div><div style="font-size:11px;color:var(--muted);font-family:'IBM Plex Mono',monospace">${it.SAF?'SAF: '+it.SAF:''}</div></div>
+        <div style="display:flex;align-items:center;gap:5px;flex-shrink:0"><span style="font-size:11px;color:var(--muted)">Cant:</span>
+        <input type="number" id="osc-qty-${idx}" value="${it.Cantidad||1}" min="1" max="99" onclick="event.stopPropagation()" style="width:48px;text-align:center;background:white;border:1px solid var(--border);border-radius:6px;padding:4px;font-size:13px;font-weight:700;color:var(--accent);font-family:'IBM Plex Mono',monospace;outline:none"/></div>
+      </label>`).join('')}
+    </div>
+    <div style="display:flex;gap:10px">
+      <button onclick="document.getElementById('modal-orderscan').remove()" style="flex:1;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:11px;color:var(--muted);font-weight:600;cursor:pointer;font-size:13px;font-family:'IBM Plex Sans',sans-serif">Cancelar</button>
+      <button onclick="saveOrderScan(${JSON.stringify(items).replace(/"/g,'&quot;')})" style="flex:2;background:linear-gradient(135deg,#0284c7,#0ea5e9);border:none;border-radius:8px;padding:11px;color:white;font-weight:700;cursor:pointer;font-size:13px;font-family:'IBM Plex Sans',sans-serif">✅ Registrar pedidos</button>
+    </div></div>`;
+  document.body.appendChild(modal);
+}
+async function saveOrderScan(items) {
+  const today=new Date().toISOString().slice(0,10);
+  const toSave=items.filter((_,idx)=>{const c=document.getElementById('osc-chk-'+idx);return c&&c.checked;})
+    .map((it,idx)=>({action:'addOrder',Anticuerpo:it.Anticuerpo,SAF:it.SAF||'',Cantidad:document.getElementById('osc-qty-'+idx)?.value||'1',FechaPedido:today,Notas:it.Notas||''}));
+  if(!toSave.length){showToast('No seleccionaste nada','err');return;}
+  document.getElementById('modal-orderscan').remove();
+  document.getElementById('loading-text').textContent='Guardando pedidos...';
+  document.getElementById('loading-overlay').style.display='flex';
+  for(const o of toSave){ try{await api(o);}catch(e){} }
+  document.getElementById('loading-overlay').style.display='none';
+  await loadData();
+  showToast(`${toSave.length} pedidos registrados ✓`,'ok');
+  switchTab('orders');
+}
+
 // ---- ALERTS ----
 function renderAlertsModal(){
   const al=getAlerts();
   const c=document.getElementById('alerts-content');
   if(!al.length){c.innerHTML=`<div style="text-align:center;padding:30px;color:var(--muted)"><div style="font-size:40px;margin-bottom:10px">✅</div><div>Todo en orden</div></div>`;return;}
   c.innerHTML=al.map(a=>{
-    const cls=a.type==='exp'?'ai-exp':a.type==='soon'?'ai-soon':a.type==='noval'?'ai-soon':'ai-last';
-    const icon=a.type==='exp'?'🚨':a.type==='soon'?'⏰':a.type==='noval'?'🔬':'📦';
+    const cls=a.type==='exp'?'ai-exp':a.type==='soon'||a.type==='lowvol'?'ai-soon':a.type==='noval'?'ai-soon':'ai-last';
+    const icon=a.type==='exp'?'🚨':a.type==='soon'?'⏰':a.type==='noval'?'🔬':a.type==='lowvol'?'💧':'📦';
     const msg=a.type==='exp'
       ?`<span style="color:var(--danger)">VENCIDO hace ${Math.abs(a.days)} días (${a.item.Vencimiento})</span>`
       :a.type==='soon'
       ?`<span style="color:var(--warn)">Vence en ${a.days} días (${a.item.Vencimiento})</span>`
       :a.type==='noval'
       ?`<span style="color:var(--warn)">Anticuerpo NO validado</span>`
+      :a.type==='lowvol'
+      ?`<span style="color:var(--warn)">Queda ${Math.round(parseFloat(a.item.VolumenRestante))}µL (${Math.round(a.pct*100)}% del frasco)</span>`
       :`<span style="color:#fb923c">Último frasco de este anticuerpo</span>`;
     return `<div class="alert-item ${cls}"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${icon}</span><strong>${a.item.Anticuerpo}</strong></div><div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">Lote: ${a.item.Lote||'—'} · ${a.item.Marca||'—'}</div><div style="font-size:12px;font-weight:600;margin-top:5px">${msg}</div></div>`;
   }).join('');
