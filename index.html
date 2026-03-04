@@ -508,10 +508,14 @@ function getAlerts() {
     if(d!==null&&d<0) res.push({type:'exp',item:i,days:d});
     else if(d!==null&&d<=60) res.push({type:'soon',item:i,days:d});
     if(i.Validado!=='Si') res.push({type:'noval',item:i});
-    // Volume alert: less than 50% remaining
-    if(i.Tipo==='concentrado' && i.Volumen_uL && i.VolumenRestante!=='' && i.VolumenRestante!==undefined) {
-      const pct = parseFloat(i.VolumenRestante) / parseFloat(i.Volumen_uL);
-      if(!isNaN(pct) && pct <= 0.5 && parseFloat(i.VolumenRestante) > 0) res.push({type:'lowvol',item:i,pct});
+    // Determinations alert: less than 50% remaining
+    if(i.Tipo==='concentrado' && i.Volumen_uL && i.Dilucion) {
+      const vol = parseFloat(i.Volumen_uL), dil = parseFloat(i.Dilucion), alq = parseFloat(i.Aliquot_uL)||100;
+      const totalDets = Math.floor(vol * dil / alq);
+      const volRest = (i.VolumenRestante !== '' && i.VolumenRestante !== undefined && !isNaN(parseFloat(i.VolumenRestante))) ? parseFloat(i.VolumenRestante) : vol;
+      const detsRest = Math.max(0, Math.floor(volRest * dil / alq));
+      const pct = totalDets > 0 ? detsRest / totalDets : 1;
+      if (pct <= 0.5 && detsRest > 0 && parseInt(i.Preparaciones) > 0) res.push({type:'lowvol', item:i, pct, detsRest, totalDets});
     }
   });
   Object.entries(cnt).forEach(([name,n])=>{ if(n===1) res.push({type:'last',item:stock.find(s=>s.Anticuerpo===name)}); });
@@ -598,22 +602,33 @@ function renderFinished() {
 }
 
 function volBar(i) {
-  if (i.Tipo !== 'concentrado' || !i.Volumen_uL) return '—';
-  const total = parseFloat(i.Volumen_uL);
-  const rest  = i.VolumenRestante !== '' && i.VolumenRestante !== undefined ? parseFloat(i.VolumenRestante) : total;
-  if (isNaN(total) || total === 0) return '—';
-  const pct = Math.max(0, Math.min(100, (rest / total) * 100));
+  if (i.Tipo !== 'concentrado' || !i.Volumen_uL || !i.Dilucion) return '—';
+  const vol   = parseFloat(i.Volumen_uL);
+  const dil   = parseFloat(i.Dilucion);
+  const alq   = parseFloat(i.Aliquot_uL) || 100;
+  const totalDets = Math.floor(vol * dil / alq);
+  if (!totalDets) return '—';
+
+  // Remaining volume → remaining dets
+  const volRest = (i.VolumenRestante !== '' && i.VolumenRestante !== undefined && !isNaN(parseFloat(i.VolumenRestante)))
+    ? parseFloat(i.VolumenRestante) : vol;
+  const detsRest = Math.max(0, Math.floor(volRest * dil / alq));
   const preps = parseInt(i.Preparaciones) || 0;
+  const pct = totalDets > 0 ? (detsRest / totalDets) * 100 : 100;
   const color = pct <= 25 ? 'var(--danger)' : pct <= 50 ? 'var(--warn)' : 'var(--success)';
-  return `<div style="min-width:90px">
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px;font-family:'IBM Plex Mono',monospace">
-      <span style="color:${color};font-weight:700">${Math.round(rest)}µL</span>
-      <span>${preps} prep${preps!==1?'s':''}</span>
+
+  return `<div style="min-width:110px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px">
+      <span style="font-size:16px;font-weight:800;font-family:'IBM Plex Mono',monospace;color:${color}">${detsRest}</span>
+      <span style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace">/ ${totalDets} det.</span>
     </div>
     <div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden">
       <div style="height:100%;width:${pct}%;background:${color};border-radius:4px;transition:width 0.3s"></div>
     </div>
-    ${pct<=50&&rest>0?`<div style="font-size:9px;color:${color};font-weight:700;margin-top:2px">⚠ MITAD</div>`:''}
+    <div style="display:flex;justify-content:space-between;margin-top:3px">
+      <span style="font-size:9px;color:var(--muted)">${preps} prep${preps!==1?'s':''}</span>
+      ${pct<=50&&detsRest>0?`<span style="font-size:9px;color:${color};font-weight:700">⚠ MITAD</span>`:''}
+    </div>
   </div>`;
 }
 
@@ -801,9 +816,12 @@ async function confirmPrep(id, dil) {
   try {
     const res = await api({ action:'registerPrep', id, prepVol });
     await loadData();
-    const consumido = (prepVol/dil).toFixed(1);
-    const pct = (res.volRestante / res.volInicial) * 100;
-    showToast(`Prep registrada — Se usaron ${consumido}µL del frasco. Quedan ${Math.round(res.volRestante)}µL (${Math.round(pct)}%) ✓`, pct<=50?'inf':'ok');
+    // Recalculate remaining dets from updated item
+    const updated = stock.find(s=>s.ID===id);
+    const alq = parseFloat(updated?.Aliquot_uL)||100;
+    const detsRest = updated ? Math.max(0, Math.floor(parseFloat(updated.VolumenRestante||0) * dil / alq)) : '?';
+    const totalDets = updated ? Math.floor(parseFloat(updated.Volumen_uL) * dil / alq) : '?';
+    showToast(`Prep registrada — Quedan ${detsRest} de ${totalDets} determinaciones ✓`, 'ok');
   } catch(e) {}
 }
 async function finishItem(id){
@@ -950,7 +968,7 @@ function renderAlertsModal(){
       :a.type==='noval'
       ?`<span style="color:var(--warn)">Anticuerpo NO validado</span>`
       :a.type==='lowvol'
-      ?`<span style="color:var(--warn)">Queda ${Math.round(parseFloat(a.item.VolumenRestante))}µL (${Math.round(a.pct*100)}% del frasco)</span>`
+      ?`<span style="color:var(--warn)">Quedan ${a.detsRest} determinaciones (${Math.round(a.pct*100)}% del total de ${a.totalDets})</span>`
       :`<span style="color:#fb923c">Último frasco de este anticuerpo</span>`;
     return `<div class="alert-item ${cls}"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:18px">${icon}</span><strong>${a.item.Anticuerpo}</strong></div><div style="font-size:11px;color:var(--muted);margin-top:2px;font-family:'IBM Plex Mono',monospace">Lote: ${a.item.Lote||'—'} · ${a.item.Marca||'—'}</div><div style="font-size:12px;font-weight:600;margin-top:5px">${msg}</div></div>`;
   }).join('');
