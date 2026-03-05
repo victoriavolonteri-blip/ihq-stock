@@ -92,13 +92,19 @@
   .btn-xl:hover { background: rgba(5,150,105,0.15); }
   .btn-reload { background: rgba(2,132,199,0.06); border: 1px solid rgba(2,132,199,0.2); border-radius: 8px; padding: 8px 14px; cursor: pointer; color: var(--accent); font-size: 11px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
 
-  .tw { overflow-x: auto; max-height: calc(100vh - 280px); overflow-y: auto; }
+  .tw { overflow-x: auto; max-height: calc(100vh - 280px); overflow-y: auto; position: relative; }
+  .tw-wrap { display: flex; flex-direction: column; }
+  .tw-scroll { overflow-x: auto; overflow-y: hidden; height: 14px; position: sticky; bottom: 0; background: var(--surface2); border-top: 1px solid var(--border); z-index: 15; }
+  .tw-scroll-inner { height: 1px; }
+  .tw table { border-collapse: separate; border-spacing: 0 5px; }
+  thead th { text-align: left; padding: 5px 11px; font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; position: sticky; top: 0; background: var(--surface2); z-index: 20; box-shadow: 0 1px 0 var(--border); }
+  thead th:first-child { position: sticky; left: 0; top: 0; z-index: 30; background: var(--surface2); }
+  tbody td:first-child { position: sticky; left: 0; z-index: 5; background: var(--surface); border-left: 1px solid var(--border); border-radius: 8px 0 0 8px; }
+  tbody tr:hover td:first-child { background: #f0f9ff; }
   table { width: 100%; border-collapse: separate; border-spacing: 0 5px; }
-  thead th { text-align: left; padding: 5px 11px; font-size: 10px; font-weight: 700; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; position: sticky; top: 0; background: var(--surface2); z-index: 10; box-shadow: 0 1px 0 var(--border); }
   tbody tr { background: var(--surface); transition: background 0.15s; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
   tbody tr:hover { background: #f0f9ff; }
   tbody td { padding: 11px 11px; font-size: 13px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  tbody td:first-child { border-left: 1px solid var(--border); border-radius: 8px 0 0 8px; }
   tbody td:last-child { border-right: 1px solid var(--border); border-radius: 0 8px 8px 0; }
   .abn { font-weight: 700; }
   .abs { font-size: 11px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; margin-top: 2px; }
@@ -266,12 +272,15 @@
           <input type="file" id="inp-import" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"/>
         </label>
       </div>
-      <div class="tw">
+      <div class="tw-wrap">
+        <div class="tw" id="tw-stock">
         <table>
           <thead><tr><th>Anticuerpo</th><th>Clon</th><th>SAF</th><th>Lote</th><th>Marca</th><th>Tipo</th><th>Validado</th><th>Vencimiento</th><th>Recepción</th><th>Apertura</th><th>Dilución / Vol.</th><th>Determinaciones</th><th>Det. Restantes</th><th>Acciones</th></tr></thead>
           <tbody id="tbody-stock"></tbody>
         </table>
         <div class="empty" id="empty-stock" style="display:none"><div style="font-size:44px;margin-bottom:10px">🧫</div><div style="font-size:15px;font-weight:600;margin-bottom:5px">Sin anticuerpos en stock</div><div style="font-size:12px">Usá "+ Agregar frasco" para comenzar</div></div>
+        </div>
+        <div class="tw-scroll" id="tw-scroll-stock"><div class="tw-scroll-inner" id="tw-scroll-inner-stock"></div></div>
       </div>
     </div>
 
@@ -479,10 +488,21 @@ async function loadData() {
 }
 
 // ---- HELPERS ----
+function parseDate(s) {
+  if (!s) return null;
+  s = s.toString().trim();
+  const dmy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+  if(dmy) return new Date(parseInt(dmy[3]), parseInt(dmy[2])-1, parseInt(dmy[1]));
+  const ymd = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+  if(ymd) return new Date(parseInt(ymd[1]), parseInt(ymd[2])-1, parseInt(ymd[3]));
+  return new Date(s);
+}
 function daysUntil(d) {
   if (!d) return null;
   const t = new Date(); t.setHours(0,0,0,0);
-  return Math.ceil((new Date(d) - t) / 86400000);
+  const parsed = parseDate(d);
+  if (!parsed || isNaN(parsed)) return null;
+  return Math.ceil((parsed - t) / 86400000);
 }
 function calcDets(vol, dil, alq) {
   // vol = µL del frasco, dil = factor dilución (1:X), alq = µL por vidrio
@@ -522,15 +542,35 @@ function getAlerts() {
   // Orders pending > 60 days
   orders.forEach(o=>{
     if(o.Estado==='Pendiente' && o.FechaPedido) {
-      const days = Math.floor((new Date() - new Date(o.FechaPedido)) / 86400000);
-      if(days >= 60) res.push({type:'oldorder', order:o, days});
+      const parseDate = s => {
+        s = s.toString().trim();
+        // DD-MM-YYYY or DD/MM/YYYY
+        const dmy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+        if(dmy) return new Date(parseInt(dmy[3]), parseInt(dmy[2])-1, parseInt(dmy[1]));
+        // YYYY-MM-DD
+        const ymd = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
+        if(ymd) return new Date(parseInt(ymd[1]), parseInt(ymd[2])-1, parseInt(ymd[3]));
+        return new Date(s);
+      };
+      const fecha = parseDate(o.FechaPedido);
+      const days = Math.floor((new Date() - fecha) / 86400000);
+      if(!isNaN(days) && days >= 60) res.push({type:'oldorder', order:o, days});
     }
   });
   return res;
 }
 
 // ---- RENDER ----
-function renderAll() { renderStats(); renderTable(); renderFinished(); renderOrders(); renderAlertBtn(); }
+function renderAll() { renderStats(); renderTable(); renderFinished(); renderOrders(); renderAlertBtn(); setTimeout(syncScrollBar, 50); }
+function syncScrollBar() {
+  const tw = document.getElementById('tw-stock');
+  const scrollBar = document.getElementById('tw-scroll-stock');
+  const inner = document.getElementById('tw-scroll-inner-stock');
+  if (!tw || !scrollBar || !inner) return;
+  inner.style.width = tw.scrollWidth + 'px';
+  tw.addEventListener('scroll', () => { scrollBar.scrollLeft = tw.scrollLeft; });
+  scrollBar.addEventListener('scroll', () => { tw.scrollLeft = scrollBar.scrollLeft; });
+}
 function switchTab(t) {
   ['stock','finished','orders'].forEach(n=>{
     document.getElementById('tab-'+n).classList.toggle('active', n===t);
@@ -556,6 +596,7 @@ function renderTable() {
   });
   const tbody=document.getElementById('tbody-stock'), empty=document.getElementById('empty-stock');
   if(!rows.length){tbody.innerHTML='';empty.style.display='block';return;}
+  rows.sort((a,b)=>a.Anticuerpo.localeCompare(b.Anticuerpo, 'es', {sensitivity:'base'}));
   empty.style.display='none';
   const cnt={}; stock.forEach(i=>{cnt[i.Anticuerpo]=(cnt[i.Anticuerpo]||0)+1;});
   tbody.innerHTML=rows.map(i=>{
