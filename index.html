@@ -491,11 +491,16 @@ async function loadData() {
 function parseDate(s) {
   if (!s) return null;
   s = s.toString().trim();
+  // DD-MM-YYYY or DD/MM/YYYY
   const dmy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
   if(dmy) return new Date(parseInt(dmy[3]), parseInt(dmy[2])-1, parseInt(dmy[1]));
+  // YYYY-MM-DD
   const ymd = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
   if(ymd) return new Date(parseInt(ymd[1]), parseInt(ymd[2])-1, parseInt(ymd[3]));
-  return new Date(s);
+  // Full Date string from Sheets: "Sat Dec 06 2025 00:00:00 GMT-0300..."
+  const d = new Date(s);
+  if (!isNaN(d)) return d;
+  return null;
 }
 function daysUntil(d) {
   if (!d) return null;
@@ -542,16 +547,6 @@ function getAlerts() {
   // Orders pending > 60 days
   orders.forEach(o=>{
     if(o.Estado==='Pendiente' && o.FechaPedido) {
-      const parseDate = s => {
-        s = s.toString().trim();
-        // DD-MM-YYYY or DD/MM/YYYY
-        const dmy = s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
-        if(dmy) return new Date(parseInt(dmy[3]), parseInt(dmy[2])-1, parseInt(dmy[1]));
-        // YYYY-MM-DD
-        const ymd = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/);
-        if(ymd) return new Date(parseInt(ymd[1]), parseInt(ymd[2])-1, parseInt(ymd[3]));
-        return new Date(s);
-      };
       const fecha = parseDate(o.FechaPedido);
       const days = Math.floor((new Date() - fecha) / 86400000);
       if(!isNaN(days) && days >= 60) res.push({type:'oldorder', order:o, days});
